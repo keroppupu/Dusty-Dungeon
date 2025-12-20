@@ -13,6 +13,12 @@ export const COLORS = {
   sky: '#C5D0D3'
 };
 
+export const DUNGEON_CONFIG = {
+  FLOOR_WIDTH: 12,
+  FLOOR_HEIGHT: 12,
+  MAX_FLOORS: 10
+};
+
 export const INITIAL_ITEMS: Item[] = [
   { id: 'herb', name: 'やくそう', type: 'CONSUMABLE', effectValue: 30, price: 10, description: 'HPを30回復する。' },
   { id: 'rusty_sword', name: 'なまくら刀', type: 'WEAPON', effectValue: 5, price: 50, description: '少しだけ攻撃力が上がる。' },

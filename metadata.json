@@ -1,5 +1,5 @@
 {
   "name": "Dusty Dungeon Chronicles",
-  "description": "A cute, muted-color 3D dungeon crawler with procedural generation, a job system, and AI-driven floor narratives. Features 10 floors of 10x10 grids, turn-based combat, and mobile-friendly controls.",
+  "description": "A cute, muted-color 3D dungeon crawler with procedural generation, a job system, and AI-driven floor narratives. Features 10 floors of 12x12 grids, turn-based combat, and mobile-friendly controls.",
   "requestFramePermissions": []
 }

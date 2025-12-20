@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, Player, DungeonFloor, JobType, Item, Enemy } from './types';
-import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA } from './constants';
+import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA, DUNGEON_CONFIG } from './constants';
 import { generateFloor } from './services/dungeonGenerator';
 import { generateFloorDialogue, generateBattleIntro } from './services/geminiService';
 import DungeonRenderer from './components/DungeonRenderer';
@@ -29,9 +29,17 @@ const App: React.FC = () => {
   const [dialogue, setDialogue] = useState<{ speaker: string; message: string; portrait: string } | null>(null);
   const [battle, setBattle] = useState<{ enemy: Enemy; log: string[] } | null>(null);
   const [message, setMessage] = useState<string>('');
+  const battleLogRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll battle log
+  useEffect(() => {
+    if (battleLogRef.current) {
+      battleLogRef.current.scrollTop = battleLogRef.current.scrollHeight;
+    }
+  }, [battle?.log]);
 
   const startDungeon = useCallback(() => {
-    const floor = generateFloor(10, 10);
+    const floor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
     setCurrentFloor(floor);
     setPlayer(prev => ({ ...prev, x: 1, y: 1, floor: 1, direction: 0 }));
     setGameState(GameState.DUNGEON);
@@ -69,19 +77,19 @@ const App: React.FC = () => {
       }
 
       // Collision
-      if (nx < 0 || ny < 0 || nx >= 10 || ny >= 10 || currentFloor.grid[ny][nx] === 1) {
+      if (nx < 0 || ny < 0 || nx >= currentFloor.width || ny >= currentFloor.height || currentFloor.grid[ny][nx] === 1) {
         return prev;
       }
 
       // Check Stairs
       if (currentFloor.grid[ny][nx] === 2) {
         setTimeout(() => {
-           if (prev.floor >= 10) {
+           if (prev.floor >= DUNGEON_CONFIG.MAX_FLOORS) {
             setMessage("おめでとう！ダンジョンを制覇した！");
             setGameState(GameState.TOWN);
           } else {
             const nextFloorNum = prev.floor + 1;
-            const nextFloor = generateFloor(10, 10);
+            const nextFloor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
             setCurrentFloor(nextFloor);
             handleFloorEnter(nextFloorNum);
             setPlayer(p => ({ ...p, x: 1, y: 1, floor: nextFloorNum, direction: 0 }));
@@ -403,11 +411,15 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-black/80 text-white p-3 rounded-xl min-h-[100px] font-mono text-[11px] overflow-y-auto border-2 border-[#8E8D8A] custom-scrollbar">
+              {/* Fixed Height Battle Log Window with Auto-Scroll */}
+              <div 
+                ref={battleLogRef}
+                className="bg-black/80 text-white p-3 rounded-xl h-32 flex-shrink-0 font-mono text-[11px] overflow-y-auto border-2 border-[#8E8D8A] custom-scrollbar scroll-smooth"
+              >
                 {battle.log.map((log, i) => <div key={i} className="mb-1 border-b border-white/5 pb-1 last:border-0">{log}</div>)}
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-2 flex-shrink-0">
                 <button onClick={() => handleBattleTurn('ATTACK')} className="py-3 bg-[#E98074] text-white rounded-lg font-bold border-b-4 border-[#E85A4F] active:border-b-0 active:translate-y-1 relative">
                   <span className="absolute top-1 left-2 text-[8px] opacity-60">[1]</span> 攻撃
                 </button>
