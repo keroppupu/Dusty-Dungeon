@@ -3,9 +3,9 @@ import { DungeonFloor } from '../types';
 
 export function generateFloor(width: number, height: number): DungeonFloor {
   const grid = Array.from({ length: height }, () => Array(width).fill(1));
+  const explored = Array.from({ length: height }, () => Array(width).fill(false));
   
-  // Simple randomized path generation to ensure "no dead ends" (or at least full connectivity)
-  // We'll use a modified approach to carve out a connected maze.
+  // Simple randomized path generation to ensure "no dead ends"
   function carve(x: number, y: number) {
     grid[y][x] = 0;
     
@@ -40,5 +40,5 @@ export function generateFloor(width: number, height: number): DungeonFloor {
   
   grid[stairsY][stairsX] = 2;
 
-  return { grid, width, height };
+  return { grid, explored, width, height };
 }

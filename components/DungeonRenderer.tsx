@@ -26,7 +26,7 @@ const DungeonRenderer: React.FC<DungeonRendererProps> = ({ player, floor }) => {
       const forward = dirs[direction];
       const right = dirs[(direction + 1) % 4];
 
-      // 背景
+      // 背景 (天井と床)
       ctx.fillStyle = COLORS.sky;
       ctx.fillRect(0, 0, w, h / 2);
       ctx.fillStyle = COLORS.floor;
@@ -50,172 +50,155 @@ const DungeonRenderer: React.FC<DungeonRendererProps> = ({ player, floor }) => {
         return floor.grid[cy][cx];
       };
 
-      // 階段（出口）を描画
-      const drawStaircase = (points: {x: number, y: number}[], light: number, isSide: boolean) => {
-        const [tl, tr, br, bl] = points;
-        const w_cell = tr.x - tl.x;
-        const h_cell = bl.y - tl.y;
-
-        // 1. 暗い入り口（穴）
-        ctx.fillStyle = `rgba(20, 15, 15, ${light})`;
-        if (!isSide) {
-          ctx.beginPath();
-          ctx.moveTo(tl.x + w_cell * 0.1, tl.y + h_cell * 0.1);
-          ctx.lineTo(tr.x - w_cell * 0.1, tr.y + h_cell * 0.1);
-          ctx.lineTo(br.x - w_cell * 0.1, br.y);
-          ctx.lineTo(bl.x + w_cell * 0.1, bl.y);
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.moveTo(tl.x, tl.y + (bl.y - tl.y) * 0.1);
-          ctx.lineTo(tr.x, tr.y + (br.y - tr.y) * 0.1);
-          ctx.lineTo(br.x, br.y);
-          ctx.lineTo(bl.x, bl.y);
-          ctx.fill();
-        }
-
-        // 2. 段差の描画
-        const numSteps = 6;
-        for (let i = 0; i < numSteps; i++) {
-          const stepRatio = i / numSteps;
-          const nextStepRatio = (i + 1) / numSteps;
-          const stepLight = light * (0.3 + (i / numSteps) * 0.7);
-
-          ctx.fillStyle = `rgba(140, 130, 120, ${stepLight})`;
-          
-          if (!isSide) {
-            // 正面階段
-            const y1 = bl.y - h_cell * 0.6 * (1 - stepRatio);
-            const y2 = bl.y - h_cell * 0.6 * (1 - nextStepRatio);
-            const x1 = tl.x + w_cell * (0.15 + stepRatio * 0.1);
-            const x2 = tr.x - w_cell * (0.15 + stepRatio * 0.1);
-            ctx.fillRect(x1, y1, x2 - x1, y2 - y1 + 1);
-            
-            // 踏み面のハイライト
-            ctx.fillStyle = `rgba(200, 190, 180, ${stepLight * 0.5})`;
-            ctx.fillRect(x1, y1, x2 - x1, 2);
-          } else {
-            // 側面階段
-            const y1Start = bl.y - (bl.y - tl.y) * 0.6 * (1 - stepRatio);
-            const y1End = br.y - (br.y - tr.y) * 0.6 * (1 - stepRatio);
-            const y2Start = bl.y - (bl.y - tl.y) * 0.6 * (1 - nextStepRatio);
-            const y2End = br.y - (br.y - tr.y) * 0.6 * (1 - nextStepRatio);
-
-            ctx.beginPath();
-            ctx.moveTo(tl.x, y1Start);
-            ctx.lineTo(tr.x, y1End);
-            ctx.lineTo(tr.x, y2End);
-            ctx.lineTo(tl.x, y2Start);
-            ctx.fill();
-            
-            // 踏み面のエッジ
-            ctx.strokeStyle = `rgba(255, 255, 255, ${stepLight * 0.3})`;
-            ctx.beginPath();
-            ctx.moveTo(tl.x, y1Start);
-            ctx.lineTo(tr.x, y1End);
-            ctx.stroke();
-          }
-        }
+      /**
+       * 下へ続く階段の描画 (参考画像を反映)
+       * 通路の幅いっぱいの段差が奥の闇へ消えていく
+       */
+      const drawDeepStairway = (df: number, sf: number, light: number) => {
+        const farZ = df + 1;
+        const xLNear = getX(df, sf - 0.5);
+        const xRNear = getX(df, sf + 0.5);
+        const xLFar = getX(farZ, sf - 0.5);
+        const xRFar = getX(farZ, sf + 0.5);
         
-        // 3. アーチの枠
-        ctx.strokeStyle = `rgba(60, 50, 45, ${light})`;
-        ctx.lineWidth = 3;
-        if (!isSide) {
-          ctx.strokeRect(tl.x + w_cell * 0.1, tl.y + h_cell * 0.1, w_cell * 0.8, h_cell * 0.9);
-        } else {
+        const yFloorNear = getY(df, false);
+        const yFloorFar = getY(farZ, false);
+        const yCeilFar = getY(farZ, true);
+
+        // 1. 階段のトンネル (奥に向かって暗くなる)
+        const grad = ctx.createLinearGradient(0, yFloorNear, 0, yFloorFar);
+        grad.addColorStop(0, `rgba(50, 45, 42, ${light})`);
+        grad.addColorStop(1, `rgba(0, 0, 0, ${light})`);
+        
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(xLNear, yFloorNear);
+        ctx.lineTo(xRNear, yFloorNear);
+        ctx.lineTo(xRFar, yFloorFar);
+        ctx.lineTo(xLFar, yFloorFar);
+        ctx.fill();
+
+        // 2. 奥の闇 (トンネルの出口)
+        ctx.fillStyle = `rgba(0, 0, 0, ${light})`;
+        ctx.fillRect(xLFar, yCeilFar, xRFar - xLFar, yFloorFar - yCeilFar);
+
+        // 3. 段差の描画
+        const numSteps = 12;
+        for (let i = 0; i < numSteps; i++) {
+          const ratio = i / numSteps;
+          const nextRatio = (i + 1) / numSteps;
+          
+          // ステップの座標計算
+          const stepY1 = yFloorNear + (yFloorFar - yFloorNear) * ratio;
+          const stepY2 = yFloorNear + (yFloorFar - yFloorNear) * nextRatio;
+          const stepW1 = (xRNear - xLNear) * (1 - ratio * 0.4);
+          const stepW2 = (xRNear - xLNear) * (1 - nextRatio * 0.4);
+          const stepX1 = (xLNear + xRNear) / 2 - stepW1 / 2;
+          const stepX2 = (xLNear + xRNear) / 2 - stepW2 / 2;
+
+          // 踏み面のグラデーション (石の質感)
+          const stepLight = light * (1 - ratio * 0.9);
+          ctx.fillStyle = `rgb(${Math.floor(100 * stepLight)}, ${Math.floor(95 * stepLight)}, ${Math.floor(90 * stepLight)})`;
+          
           ctx.beginPath();
-          ctx.moveTo(tl.x, tl.y + (bl.y - tl.y) * 0.1);
-          ctx.lineTo(tr.x, tr.y + (br.y - tr.y) * 0.1);
-          ctx.lineTo(br.x, br.y);
-          ctx.lineTo(bl.x, bl.y);
-          ctx.closePath();
+          ctx.moveTo(stepX1, stepY1);
+          ctx.lineTo(stepX1 + stepW1, stepY1);
+          ctx.lineTo(stepX2 + stepW2, stepY2);
+          ctx.lineTo(stepX2, stepY2);
+          ctx.fill();
+
+          // 段差の輪郭とエッジのハイライト
+          ctx.strokeStyle = `rgba(255, 255, 255, ${stepLight * 0.15})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(stepX1, stepY1);
+          ctx.lineTo(stepX1 + stepW1, stepY1);
+          ctx.stroke();
+          
+          ctx.strokeStyle = `rgba(0, 0, 0, ${stepLight * 0.4})`;
+          ctx.beginPath();
+          ctx.moveTo(stepX2, stepY2);
+          ctx.lineTo(stepX2 + stepW2, stepY2);
           ctx.stroke();
         }
+
+        // 4. 側面の壁 (階段に合わせた影)
+        ctx.fillStyle = `rgba(20, 18, 15, ${light * 0.6})`;
+        // 左壁
+        ctx.beginPath();
+        ctx.moveTo(xLNear, getY(df, true));
+        ctx.lineTo(xLFar, yCeilFar);
+        ctx.lineTo(xLFar, yFloorFar);
+        ctx.lineTo(xLNear, yFloorNear);
+        ctx.fill();
+        // 右壁
+        ctx.beginPath();
+        ctx.moveTo(xRNear, getY(df, true));
+        ctx.lineTo(xRFar, yCeilFar);
+        ctx.lineTo(xRFar, yFloorFar);
+        ctx.lineTo(xRNear, yFloorNear);
+        ctx.fill();
       };
 
       const maxDepth = 6;
-
-      // 奥から手前に向かって描画
       for (let d = maxDepth; d >= 0; d--) {
         const nearZ = d === 0 ? 0.05 : d;
         const farZ = d + 1;
-
         const light = Math.max(0, 1 - d / 6);
         const baseColor = (r: number, g: number, b: number, factor = 1) => 
           `rgb(${Math.floor(r * light * factor)}, ${Math.floor(g * light * factor)}, ${Math.floor(b * light * factor)})`;
 
-        // 1. 正面壁
+        // セルに階段がある場合、そのセルの場所に階段を描く
+        if (getCellAt(d, 0) === 2) {
+          drawDeepStairway(d, 0, light);
+        }
+
+        // 正面壁の描画
         for (let s = -1; s <= 1; s++) {
           const cell = getCellAt(d + 1, s);
-          if (cell !== 0) {
-            const isStairs = cell === 2;
-            const r = isStairs ? 140 : 176, g = isStairs ? 130 : 162, b = isStairs ? 120 : 149;
+          // 階段の正面には壁を描かない (通路として開放)
+          if (cell === 1) {
             const xL = getX(farZ, s - 0.5);
             const xR = getX(farZ, s + 0.5);
             const yT = getY(farZ, true);
             const yB = getY(farZ, false);
-            
-            ctx.fillStyle = baseColor(r, g, b, 0.9);
+            ctx.fillStyle = baseColor(160, 150, 140, 0.9); // 石の壁っぽいくすみカラー
             ctx.fillRect(xL - 1, yT - 1, (xR - xL) + 2, (yB - yT) + 2);
-
-            if (isStairs) {
-              drawStaircase([{x: xL, y: yT}, {x: xR, y: yT}, {x: xR, y: yB}, {x: xL, y: yB}], light, false);
-            }
+            
+            // 壁のディテール (薄い横線)
+            ctx.strokeStyle = baseColor(120, 110, 100, 0.5);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(xL, yT + (yB - yT) * 0.3); ctx.lineTo(xR, yT + (yB - yT) * 0.3);
+            ctx.moveTo(xL, yT + (yB - yT) * 0.7); ctx.lineTo(xR, yT + (yB - yT) * 0.7);
+            ctx.stroke();
           }
         }
 
-        // 2. 側面壁 (左)
-        const leftCell = getCellAt(d, -1);
-        if (leftCell !== 0) {
-          const isStairs = leftCell === 2;
-          const r = isStairs ? 140 : 176, g = isStairs ? 130 : 162, b = isStairs ? 120 : 149;
-          const xN = getX(nearZ, -0.5);
-          const xF = getX(farZ, -0.5);
-          const yNT = getY(nearZ, true);
-          const yNB = getY(nearZ, false);
-          const yFT = getY(farZ, true);
-          const yFB = getY(farZ, false);
-          
-          ctx.fillStyle = baseColor(r, g, b, 1.0);
-          ctx.beginPath();
-          ctx.moveTo(xN, yNT - 1); ctx.lineTo(xF, yFT - 1);
-          ctx.lineTo(xF, yFB + 1); ctx.lineTo(xN, yNB + 1);
-          ctx.fill();
-
-          if (isStairs) {
-            drawStaircase([{x: xN, y: yNT}, {x: xF, y: yFT}, {x: xF, y: yFB}, {x: xN, y: yNB}], light, true);
-          }
+        // 側面(左)
+        if (getCellAt(d, -1) === 1) {
+          const xN = getX(nearZ, -0.5); const xF = getX(farZ, -0.5);
+          const yNT = getY(nearZ, true); const yNB = getY(nearZ, false);
+          const yFT = getY(farZ, true); const yFB = getY(farZ, false);
+          ctx.fillStyle = baseColor(160, 150, 140, 1.0);
+          ctx.beginPath(); ctx.moveTo(xN, yNT - 1); ctx.lineTo(xF, yFT - 1); ctx.lineTo(xF, yFB + 1); ctx.lineTo(xN, yNB + 1); ctx.fill();
         }
 
-        // 3. 側面壁 (右)
-        const rightCell = getCellAt(d, 1);
-        if (rightCell !== 0) {
-          const isStairs = rightCell === 2;
-          const r = isStairs ? 140 : 176, g = isStairs ? 130 : 162, b = isStairs ? 120 : 149;
-          const xN = getX(nearZ, 0.5);
-          const xF = getX(farZ, 0.5);
-          const yNT = getY(nearZ, true);
-          const yNB = getY(nearZ, false);
-          const yFT = getY(farZ, true);
-          const yFB = getY(farZ, false);
-          
-          ctx.fillStyle = baseColor(r, g, b, 1.0);
-          ctx.beginPath();
-          ctx.moveTo(xN, yNT - 1); ctx.lineTo(xF, yFT - 1);
-          ctx.lineTo(xF, yFB + 1); ctx.lineTo(xN, yNB + 1);
-          ctx.fill();
-
-          if (isStairs) {
-            drawStaircase([{x: xN, y: yNT}, {x: xF, y: yFT}, {x: xF, y: yFB}, {x: xN, y: yNB}], light, true);
-          }
+        // 側面(右)
+        if (getCellAt(d, 1) === 1) {
+          const xN = getX(nearZ, 0.5); const xF = getX(farZ, 0.5);
+          const yNT = getY(nearZ, true); const yNB = getY(nearZ, false);
+          const yFT = getY(farZ, true); const yFB = getY(farZ, false);
+          ctx.fillStyle = baseColor(160, 150, 140, 1.0);
+          ctx.beginPath(); ctx.moveTo(xN, yNT - 1); ctx.lineTo(xF, yFT - 1); ctx.lineTo(xF, yFB + 1); ctx.lineTo(xN, yNB + 1); ctx.fill();
         }
       }
 
-      // ビネット
-      const grad = ctx.createRadialGradient(w/2, h/2, w/4, w/2, h/2, w/1.1);
-      grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(1, 'rgba(0,0,0,0.5)');
-      ctx.fillStyle = grad;
+      // ビネット (周辺を暗く)
+      const gradVignette = ctx.createRadialGradient(w/2, h/2, w/4, w/2, h/2, w/1.1);
+      gradVignette.addColorStop(0, 'rgba(0,0,0,0)');
+      gradVignette.addColorStop(1, 'rgba(0,0,0,0.6)');
+      ctx.fillStyle = gradVignette;
       ctx.fillRect(0, 0, w, h);
 
       drawMiniMap(ctx, w, floor, px, py, direction);
@@ -231,6 +214,13 @@ const DungeonRenderer: React.FC<DungeonRendererProps> = ({ player, floor }) => {
       ctx.fillRect(ox - 4, oy - 4, size + 8, size + 8);
       for (let ly = 0; ly < floor.height; ly++) {
         for (let lx = 0; lx < floor.width; lx++) {
+          // Check explored status
+          if (!floor.explored[ly][lx]) {
+            ctx.fillStyle = 'rgba(0,0,0,0.4)'; // Still hidden
+            ctx.fillRect(ox + lx * cellWidth, oy + ly * cellHeight, cellWidth - 0.5, cellHeight - 0.5);
+            continue;
+          }
+
           const cell = floor.grid[ly][lx];
           if (cell === 1) ctx.fillStyle = COLORS.primary;
           else if (cell === 2) ctx.fillStyle = COLORS.accent;
@@ -256,12 +246,7 @@ const DungeonRenderer: React.FC<DungeonRendererProps> = ({ player, floor }) => {
 
   return (
     <div className="w-full h-full relative bg-black overflow-hidden flex items-center justify-center">
-      <canvas 
-        ref={canvasRef} 
-        width={400} 
-        height={300} 
-        className="w-full h-full object-contain pixelated"
-      />
+      <canvas ref={canvasRef} width={400} height={300} className="w-full h-full object-contain pixelated" />
       <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(0,0,0,0.6)]" />
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/40 px-4 py-1.5 rounded-full border border-white/10 backdrop-blur-sm">
         <div className="flex gap-6 text-[10px] font-mono tracking-[0.3em] text-white/50 items-center">

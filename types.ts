@@ -61,6 +61,7 @@ export interface Enemy {
 
 export interface DungeonFloor {
   grid: number[][]; // 0: path, 1: wall, 2: stairs
+  explored: boolean[][]; // Auto-mapping status
   width: number;
   height: number;
 }

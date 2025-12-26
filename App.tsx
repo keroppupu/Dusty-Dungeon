@@ -1,17 +1,22 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameState, Player, DungeonFloor, JobType, Item, Enemy } from './types';
-import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA, DUNGEON_CONFIG } from './constants';
+import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA, DUNGEON_CONFIG, ENEMY_IMAGES, GUIDE_IMAGE } from './constants';
 import { generateFloor } from './services/dungeonGenerator';
 import { generateFloorDialogue, generateBattleIntro } from './services/geminiService';
 import DungeonRenderer from './components/DungeonRenderer';
 import VirtualPad from './components/VirtualPad';
-import { ShoppingBag, Sword, Shield, Heart, Zap, User, ArrowRight, Home } from 'lucide-react';
+import { ShoppingBag, Sword, Shield, Heart, Zap, User, ArrowRight } from 'lucide-react';
+
+interface VisualEffect {
+  id: number;
+  type: 'hit' | 'slash' | 'shake';
+  target: 'player' | 'enemy';
+}
 
 const App: React.FC = () => {
-  // Game State
   const [gameState, setGameState] = useState<GameState>(GameState.TOWN);
-  const [player, setPlayer] = useState<Player>({
+  const [player, setPlayer] = useState<Player>(() => ({
     name: '冒険者',
     job: JobType.WARRIOR,
     stats: { hp: 100, maxHp: 100, mp: 20, maxMp: 20, atk: 15, def: 10, level: 1, exp: 0 },
@@ -23,37 +28,96 @@ const App: React.FC = () => {
     direction: 0,
     equippedWeapon: INITIAL_ITEMS[1],
     equippedArmor: INITIAL_ITEMS[2]
-  });
+  }));
   
   const [currentFloor, setCurrentFloor] = useState<DungeonFloor | null>(null);
   const [dialogue, setDialogue] = useState<{ speaker: string; message: string; portrait: string } | null>(null);
   const [battle, setBattle] = useState<{ enemy: Enemy; log: string[] } | null>(null);
   const [message, setMessage] = useState<string>('');
+  const [activeVfx, setActiveVfx] = useState<VisualEffect[]>([]);
   const battleLogRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll battle log
   useEffect(() => {
     if (battleLogRef.current) {
       battleLogRef.current.scrollTop = battleLogRef.current.scrollHeight;
     }
   }, [battle?.log]);
 
+  useEffect(() => {
+    if (gameState === GameState.DUNGEON && currentFloor) {
+      const { x, y } = player;
+      const newExplored = [...currentFloor.explored.map(row => [...row])];
+      let changed = false;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (ny >= 0 && ny < currentFloor.height && nx >= 0 && nx < currentFloor.width) {
+            if (!newExplored[ny][nx]) {
+              newExplored[ny][nx] = true;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      if (changed) {
+        setCurrentFloor({ ...currentFloor, explored: newExplored });
+      }
+    }
+  }, [player.x, player.y, gameState, currentFloor]);
+
+  const triggerVfx = (type: VisualEffect['type'], target: VisualEffect['target']) => {
+    const id = Date.now();
+    setActiveVfx(prev => [...prev, { id, type, target }]);
+    setTimeout(() => {
+      setActiveVfx(prev => prev.filter(v => v.id !== id));
+    }, 500);
+  };
+
+  const backToTown = useCallback(() => {
+    setCurrentFloor(null);
+    setGameState(GameState.TOWN);
+    setBattle(null);
+    setPlayer(p => ({ ...p, floor: 1 }));
+  }, []);
+
+  const handleFloorEnter = async (floorNum: number, pName: string, pJob: JobType) => {
+    setGameState(GameState.DIALOGUE);
+    const talk = await generateFloorDialogue(floorNum, pName, pJob);
+    setDialogue(talk);
+  };
+
   const startDungeon = useCallback(() => {
     const floor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
     setCurrentFloor(floor);
     setPlayer(prev => ({ ...prev, x: 1, y: 1, floor: 1, direction: 0 }));
-    setGameState(GameState.DUNGEON);
-    handleFloorEnter(1);
+    handleFloorEnter(1, player.name, player.job);
   }, [player.name, player.job]);
 
-  const handleFloorEnter = async (floorNum: number) => {
-    const talk = await generateFloorDialogue(floorNum, player.name, player.job);
-    setDialogue(talk);
-    setGameState(GameState.DIALOGUE);
+  const triggerBattle = async () => {
+    const enemyNames = Object.keys(ENEMY_IMAGES);
+    const name = enemyNames[Math.floor(Math.random() * enemyNames.length)];
+    const intro = await generateBattleIntro(name);
+    
+    setBattle({
+      enemy: {
+        name,
+        hp: 20 + player.floor * 10,
+        maxHp: 20 + player.floor * 10,
+        atk: 5 + player.floor * 3,
+        def: 2 + player.floor * 2,
+        exp: 10 * player.floor,
+        gold: 15 * player.floor
+      },
+      log: [intro]
+    });
+    setGameState(GameState.BATTLE);
   };
 
   const movePlayer = (action: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT') => {
-    if (!currentFloor) return;
+    if (!currentFloor || (gameState !== GameState.DUNGEON)) return;
 
     setPlayer(prev => {
       let nx = prev.x;
@@ -76,55 +140,29 @@ const App: React.FC = () => {
         return { ...prev, direction: ndir };
       }
 
-      // Collision
       if (nx < 0 || ny < 0 || nx >= currentFloor.width || ny >= currentFloor.height || currentFloor.grid[ny][nx] === 1) {
         return prev;
       }
 
-      // Check Stairs
       if (currentFloor.grid[ny][nx] === 2) {
-        setTimeout(() => {
-           if (prev.floor >= DUNGEON_CONFIG.MAX_FLOORS) {
-            setMessage("おめでとう！ダンジョンを制覇した！");
-            setGameState(GameState.TOWN);
-          } else {
-            const nextFloorNum = prev.floor + 1;
-            const nextFloor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
-            setCurrentFloor(nextFloor);
-            handleFloorEnter(nextFloorNum);
-            setPlayer(p => ({ ...p, x: 1, y: 1, floor: nextFloorNum, direction: 0 }));
-          }
-        }, 100);
-        return { ...prev, x: nx, y: ny };
+        if (prev.floor >= DUNGEON_CONFIG.MAX_FLOORS) {
+          setMessage("おめでとう！ダンジョンを制覇した！");
+          backToTown();
+        } else {
+          const nextFloorNum = prev.floor + 1;
+          const nextFloor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
+          setCurrentFloor(nextFloor);
+          handleFloorEnter(nextFloorNum, prev.name, prev.job);
+          return { ...prev, x: 1, y: 1, floor: nextFloorNum, direction: 0 };
+        }
       }
 
-      // Check Encounter (15% chance if moving)
       if ((nx !== prev.x || ny !== prev.y) && Math.random() < 0.15) {
         triggerBattle();
       }
 
       return { ...prev, x: nx, y: ny, direction: ndir };
     });
-  };
-
-  const triggerBattle = async () => {
-    const enemyNames = ['スライム', 'ゴブリン', 'コウモリ', 'ガイコツ', '魔導士'];
-    const name = enemyNames[Math.floor(Math.random() * enemyNames.length)];
-    const intro = await generateBattleIntro(name);
-    
-    setBattle({
-      enemy: {
-        name,
-        hp: 20 + player.floor * 10,
-        maxHp: 20 + player.floor * 10,
-        atk: 5 + player.floor * 3,
-        def: 2 + player.floor * 2,
-        exp: 10 * player.floor,
-        gold: 15 * player.floor
-      },
-      log: [intro]
-    });
-    setGameState(GameState.BATTLE);
   };
 
   const handleBattleTurn = (action: 'ATTACK' | 'ITEM' | 'RUN') => {
@@ -136,6 +174,9 @@ const App: React.FC = () => {
       const newEnemyHp = Math.max(0, battle.enemy.hp - damage);
       const newLogs = [...battle.log, `${player.name}の攻撃！ ${battle.enemy.name}に${damage}のダメージ！`];
       
+      triggerVfx('slash', 'enemy');
+      triggerVfx('shake', 'enemy');
+
       if (newEnemyHp <= 0) {
         newLogs.push(`${battle.enemy.name}を倒した！`);
         newLogs.push(`${battle.enemy.exp}の経験値と${battle.enemy.gold}Gを手に入れた。`);
@@ -156,18 +197,24 @@ const App: React.FC = () => {
           setBattle(null);
         }, 1500);
       } else {
-        const eAtk = battle.enemy.atk;
-        const pDef = player.stats.def + (player.equippedArmor?.effectValue || 0);
-        const eDamage = Math.max(1, eAtk - pDef + Math.floor(Math.random() * 3));
-        const newPlayerHp = Math.max(0, player.stats.hp - eDamage);
-        
-        newLogs.push(`${battle.enemy.name}の攻撃！ ${player.name}は${eDamage}のダメージ！`);
-        setPlayer(p => ({ ...p, stats: { ...p.stats, hp: newPlayerHp } }));
+        setTimeout(() => {
+          const eAtk = battle.enemy.atk;
+          const pDef = player.stats.def + (player.equippedArmor?.effectValue || 0);
+          const eDamage = Math.max(1, eAtk - pDef + Math.floor(Math.random() * 3));
+          const newPlayerHp = Math.max(0, player.stats.hp - eDamage);
+          
+          triggerVfx('hit', 'player');
+          triggerVfx('shake', 'player');
 
-        if (newPlayerHp <= 0) {
-          newLogs.push(`${player.name}は倒れてしまった...`);
-          setTimeout(() => setGameState(GameState.GAMEOVER), 2000);
-        }
+          newLogs.push(`${battle.enemy.name}の攻撃！ ${player.name}は${eDamage}のダメージ！`);
+          setPlayer(p => ({ ...p, stats: { ...p.stats, hp: newPlayerHp } }));
+
+          if (newPlayerHp <= 0) {
+            newLogs.push(`${player.name}は倒れてしまった...`);
+            setTimeout(() => setGameState(GameState.GAMEOVER), 2000);
+          }
+          setBattle(prev => prev ? { ...prev, log: newLogs } : null);
+        }, 600);
       }
       setBattle({ ...battle, enemy: { ...battle.enemy, hp: newEnemyHp }, log: newLogs });
     } else if (action === 'RUN') {
@@ -181,6 +228,10 @@ const App: React.FC = () => {
         const pDef = player.stats.def + (player.equippedArmor?.effectValue || 0);
         const eDamage = Math.max(1, eAtk - pDef);
         const newPlayerHp = Math.max(0, player.stats.hp - eDamage);
+        
+        triggerVfx('hit', 'player');
+        triggerVfx('shake', 'player');
+
         newLogs.push(`${battle.enemy.name}の追撃！ ${player.name}は${eDamage}のダメージ！`);
         setPlayer(p => ({ ...p, stats: { ...p.stats, hp: newPlayerHp } }));
         setBattle({ ...battle, log: newLogs });
@@ -201,24 +252,6 @@ const App: React.FC = () => {
     }
   };
 
-  const changeJob = (job: JobType) => {
-    const data = JOB_DATA[job];
-    setPlayer(p => ({
-      ...p,
-      job,
-      stats: {
-        ...p.stats,
-        maxHp: data.hp,
-        hp: data.hp,
-        maxMp: data.mp,
-        mp: data.mp,
-        atk: data.atk,
-        def: data.def
-      }
-    }));
-    setMessage(`${job}に転職した。`);
-  };
-
   const useItem = (item: Item) => {
     if (item.type === 'CONSUMABLE') {
       setPlayer(p => ({
@@ -236,11 +269,9 @@ const App: React.FC = () => {
     }
   };
 
-  // Global Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key;
-
       if (gameState === GameState.DUNGEON) {
         if (key === 'ArrowUp' || key === 'w') movePlayer('UP');
         if (key === 'ArrowDown' || key === 's') movePlayer('DOWN');
@@ -250,11 +281,6 @@ const App: React.FC = () => {
       } else if (gameState === GameState.TOWN) {
         if (key === '1') startDungeon();
         if (key === '2') setGameState(GameState.MENU);
-        // Shop inventory keys 3-9
-        const shopIndex = parseInt(key) - 3;
-        if (shopIndex >= 0 && shopIndex < SHOP_INVENTORY.length) {
-          buyItem(SHOP_INVENTORY[shopIndex]);
-        }
       } else if (gameState === GameState.DIALOGUE) {
         if (key === 'Enter' || key === ' ') setGameState(GameState.DUNGEON);
       } else if (gameState === GameState.BATTLE) {
@@ -265,29 +291,25 @@ const App: React.FC = () => {
         if (key === 'Escape' || key === 'm' || key === 'c') {
           setGameState(battle ? GameState.BATTLE : (currentFloor ? GameState.DUNGEON : GameState.TOWN));
         }
-        // Use items 1-9
-        const itemIndex = parseInt(key) - 1;
-        if (itemIndex >= 0 && itemIndex < player.inventory.length) {
-          useItem(player.inventory[itemIndex]);
-        }
       } else if (gameState === GameState.GAMEOVER) {
         if (key === 'Enter') {
           setPlayer(p => ({ ...p, gold: Math.floor(p.gold / 2), stats: { ...p.stats, hp: p.stats.maxHp } }));
-          setGameState(GameState.TOWN);
+          backToTown();
         }
       }
-      
       if (message && key === 'Enter') setMessage('');
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState, currentFloor, player, battle, message]);
 
+  const getEnemyImage = (name: string) => {
+    return ENEMY_IMAGES[name] || `https://api.dicebear.com/7.x/pixel-art/svg?seed=${name}`;
+  };
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-[#F5F5F5] p-2 text-[#4A4A48] select-none overflow-hidden">
+    <div className={`flex items-center justify-center min-h-screen bg-[#F5F5F5] p-2 text-[#4A4A48] select-none overflow-hidden ${activeVfx.some(v => v.type === 'shake' && v.target === 'player') ? 'animate-shake' : ''}`}>
       <div className="relative w-full max-w-lg aspect-[3/4] bg-[#EAE7DC] border-8 border-[#8E8D8A] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-        
         {/* Header Stats */}
         <div className="bg-[#8E8D8A] text-white p-3 flex justify-between items-center shadow-md z-10">
           <div className="flex items-center gap-2">
@@ -295,7 +317,6 @@ const App: React.FC = () => {
               <User size={12} /> LV.{player.stats.level}
             </div>
             <span className="text-sm font-bold truncate max-w-[80px]">{player.name}</span>
-            <span className="text-[10px] bg-black/20 px-2 rounded">{player.job}</span>
           </div>
           <div className="flex gap-3 text-xs font-bold">
             <span className="flex items-center gap-1"><Heart size={14} className="text-[#E98074]" /> {player.stats.hp}/{player.stats.maxHp}</span>
@@ -303,233 +324,180 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Main Game Screen */}
         <div className="flex-1 relative overflow-hidden bg-black">
-          
-          {/* Town State */}
+          {/* Main Visual Content */}
+          {(gameState === GameState.DUNGEON || gameState === GameState.BATTLE || gameState === GameState.DIALOGUE) && currentFloor && (
+            <div className="h-full relative">
+              <DungeonRenderer player={player} floor={currentFloor} />
+              
+              {gameState === GameState.BATTLE && battle && (
+                <div className="absolute inset-0 bg-black/60 flex flex-col p-4 space-y-4 animate-in fade-in duration-500">
+                  <div className={`flex-1 flex flex-col items-center justify-center space-y-6 ${activeVfx.some(v => v.type === 'shake' && v.target === 'enemy') ? 'animate-shake' : ''}`}>
+                    <div className="relative w-48 h-48 flex items-center justify-center">
+                      <div className="w-full h-full flex items-center justify-center drop-shadow-[0_0_20px_rgba(255,255,255,0.3)]">
+                        <img 
+                          src={getEnemyImage(battle.enemy.name)} 
+                          className="max-w-full max-h-full pixelated object-contain relative z-0" 
+                          alt="enemy"
+                        />
+                        {activeVfx.map(v => v.target === 'enemy' && (
+                          <div key={v.id} className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                            {v.type === 'slash' && <div className="w-full h-1 bg-white/80 rotate-45 animate-slash shadow-[0_0_10px_white]" />}
+                            {v.type === 'hit' && <div className="w-8 h-8 bg-yellow-400/80 rounded-full animate-hit-spark" />}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 text-center">
+                      <div className="font-bold text-lg text-white drop-shadow-lg">{battle.enemy.name}</div>
+                      <div className="w-32 h-3 bg-gray-900/50 rounded-full mt-2 border border-white/20 overflow-hidden mx-auto">
+                        <div 
+                          className="h-full bg-gradient-to-r from-red-500 to-pink-500 transition-all duration-300" 
+                          style={{ width: `${(battle.enemy.hp / battle.enemy.maxHp) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div ref={battleLogRef} className="bg-black/80 text-white p-3 rounded-xl h-32 flex-shrink-0 font-mono text-[11px] overflow-y-auto border-2 border-[#8E8D8A] custom-scrollbar scroll-smooth">
+                    {battle.log.map((log, i) => <div key={i} className="mb-1 border-b border-white/5 pb-1 last:border-0">{log}</div>)}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 flex-shrink-0">
+                    <button onClick={() => handleBattleTurn('ATTACK')} className="py-3 bg-[#E98074] text-white rounded-lg font-bold border-b-4 border-[#E85A4F] active:border-b-0 active:translate-y-1">
+                      攻撃
+                    </button>
+                    <button onClick={() => setGameState(GameState.MENU)} className="py-3 bg-[#D8C3A5] rounded-lg font-bold border-b-4 border-[#8E8D8A] active:border-b-0 active:translate-y-1">
+                      道具
+                    </button>
+                    <button onClick={() => handleBattleTurn('RUN')} className="py-3 bg-[#8E8D8A] text-white rounded-lg font-bold border-b-4 border-[#4A4A48] active:border-b-0 active:translate-y-1">
+                      逃走
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {gameState === GameState.DUNGEON && (
+                <>
+                  <div className="absolute top-4 left-4 pointer-events-none">
+                    <div className="bg-black/40 backdrop-blur-sm text-white px-3 py-1 rounded-full text-xs font-bold border border-white/20">地下 {player.floor} 階</div>
+                  </div>
+                  <VirtualPad onMove={movePlayer} onMenu={() => setGameState(GameState.MENU)} />
+                </>
+              )}
+            </div>
+          )}
+
+          {gameState === GameState.DIALOGUE && dialogue && (
+            <div className="h-full flex items-end justify-center p-4 bg-black/30 z-20 absolute inset-0">
+              <div className="bg-[#F1FAEE]/95 backdrop-blur-md w-full p-5 rounded-2xl shadow-2xl border-4 border-[#8E8D8A] relative animate-in slide-in-from-bottom duration-300">
+                <div className="flex items-center gap-4 mb-3 border-b border-[#D8C3A5] pb-2">
+                  <div className="w-16 h-16 bg-white rounded-lg border-2 border-[#E98074] overflow-hidden flex items-center justify-center p-1">
+                    <img 
+                      src={dialogue.portrait} 
+                      className="max-w-full max-h-full object-contain pixelated" 
+                      alt="portrait"
+                    />
+                  </div>
+                  <h4 className="font-bold text-[#E98074] text-sm uppercase tracking-wider">{dialogue.speaker}</h4>
+                </div>
+                <p className="text-sm leading-relaxed mb-4 min-h-[3em]">{dialogue.message}</p>
+                <button onClick={() => setGameState(GameState.DUNGEON)} className="w-full py-2 bg-[#E98074] text-white rounded-lg font-bold hover:brightness-90 active:scale-95 transition">
+                  つぎへ
+                </button>
+              </div>
+            </div>
+          )}
+
           {gameState === GameState.TOWN && (
             <div className="h-full flex flex-col p-4 space-y-4 bg-[#EAE7DC]">
               <div className="text-center mb-2">
-                <h1 className="text-2xl font-bold text-[#E98074]">ななしの町</h1>
-                <p className="text-sm opacity-70">穏やかな時間が流れる休息の地</p>
+                <h1 className="text-2xl font-bold text-[#E98074]">冒険の町</h1>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <button onClick={startDungeon} className="flex flex-col items-center justify-center p-4 bg-[#D8C3A5] rounded-xl hover:bg-[#8E8D8A] hover:text-white transition group border-b-4 border-[#8E8D8A] active:border-b-0 active:translate-y-1 relative">
-                  <span className="absolute top-1 left-2 text-[8px] bg-black/20 px-1 rounded text-white">[1]</span>
                   <ArrowRight size={32} className="mb-2 group-hover:scale-110" />
                   <span className="font-bold">ダンジョンへ</span>
                 </button>
                 <button onClick={() => setGameState(GameState.MENU)} className="flex flex-col items-center justify-center p-4 bg-[#D8C3A5] rounded-xl hover:bg-[#8E8D8A] hover:text-white transition group border-b-4 border-[#8E8D8A] active:border-b-0 active:translate-y-1 relative">
-                  <span className="absolute top-1 left-2 text-[8px] bg-black/20 px-1 rounded text-white">[2]</span>
                   <Sword size={32} className="mb-2 group-hover:scale-110" />
                   <span className="font-bold">もちもの</span>
                 </button>
               </div>
-              
               <div className="bg-white/50 rounded-xl p-4 flex-1 flex flex-col overflow-hidden">
                 <h3 className="font-bold flex items-center gap-2 mb-2 border-b border-[#D1C7BD] pb-1"><ShoppingBag size={18} /> おみせ ({player.gold}G)</h3>
                 <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                  {SHOP_INVENTORY.map((item, idx) => (
-                    <button key={item.id} onClick={() => buyItem(item)} className="w-full text-left p-2 bg-[#F1FAEE] rounded border border-[#D1C7BD] flex justify-between items-center text-sm hover:brightness-95 transition relative pl-6">
-                      <span className="absolute left-1 text-[8px] font-bold text-gray-400">[{idx + 3}]</span>
+                  {SHOP_INVENTORY.map((item) => (
+                    <button key={item.id} onClick={() => buyItem(item)} className="w-full text-left p-2 bg-[#F1FAEE] rounded border border-[#D1C7BD] flex justify-between items-center text-sm hover:brightness-95 transition relative pl-2">
                       <span>{item.name}</span>
                       <span className="text-orange-600 font-bold">{item.price}G</span>
                     </button>
                   ))}
                 </div>
               </div>
-
-              <div className="bg-white/50 rounded-xl p-4">
-                <h3 className="font-bold mb-2 border-b border-[#D1C7BD] pb-1">転職</h3>
-                <div className="grid grid-cols-4 gap-2">
-                  {Object.values(JobType).map(job => (
-                    <button key={job} onClick={() => changeJob(job as JobType)} className={`text-[10px] py-2 rounded border transition ${player.job === job ? 'bg-[#E98074] text-white border-[#E85A4F]' : 'bg-[#D8C3A5] border-[#8E8D8A]'}`}>
-                      {job}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
 
-          {/* Dungeon Exploration State */}
-          {gameState === GameState.DUNGEON && currentFloor && (
-            <div className="h-full relative">
-              <DungeonRenderer player={player} floor={currentFloor} />
-              <div className="absolute top-4 left-4 pointer-events-none">
-                <div className="bg-black/40 backdrop-blur-sm text-white px-3 py-1 rounded-full text-xs font-bold border border-white/20">
-                   地下 {player.floor} 階
-                </div>
-              </div>
-              <div className="absolute top-4 right-4 text-[10px] text-white/50 bg-black/20 px-2 py-1 rounded">
-                [W/A/S/D] 移動 | [M] メニュー
-              </div>
-              <VirtualPad onMove={movePlayer} onMenu={() => setGameState(GameState.MENU)} />
-            </div>
-          )}
-
-          {/* Dialogue State */}
-          {gameState === GameState.DIALOGUE && dialogue && (
-            <div className="h-full flex items-end justify-center p-4 bg-transparent z-20">
-              <div className="bg-[#F1FAEE]/95 backdrop-blur-md w-full p-5 rounded-2xl shadow-2xl border-4 border-[#8E8D8A] relative animate-in slide-in-from-bottom duration-300">
-                <div className="flex items-center gap-4 mb-3 border-b border-[#D8C3A5] pb-2">
-                  <div className="w-14 h-14 bg-white rounded-lg border-2 border-[#E98074] overflow-hidden">
-                    <img src={dialogue.portrait} className="w-full h-full object-cover pixelated scale-125" alt="portrait" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-[#E98074] text-sm uppercase tracking-wider">{dialogue.speaker}</h4>
-                  </div>
-                </div>
-                <p className="text-sm leading-relaxed mb-4 min-h-[3em]">{dialogue.message}</p>
-                <button 
-                  onClick={() => setGameState(GameState.DUNGEON)}
-                  className="w-full py-2 bg-[#E98074] text-white rounded-lg font-bold hover:brightness-90 active:scale-95 transition relative"
-                >
-                  つぎへ <span className="text-[10px] ml-2 opacity-60">[Enter]</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Battle State */}
-          {gameState === GameState.BATTLE && battle && (
-            <div className="h-full flex flex-col p-4 space-y-4 bg-[#EAE7DC]">
-              <div className="flex-1 flex flex-col items-center justify-center space-y-6">
-                <div className="relative">
-                  <div className="w-32 h-32 bg-white rounded-2xl flex items-center justify-center border-4 border-[#8E8D8A] shadow-xl animate-bounce duration-[3000ms]">
-                    <img src={`https://picsum.photos/seed/${battle.enemy.name}/128/128`} className="w-28 h-28 rounded-lg pixelated" alt="enemy" />
-                  </div>
-                  <div className="mt-4 text-center">
-                    <div className="font-bold text-lg text-[#4A4A48] drop-shadow-sm">{battle.enemy.name}</div>
-                    <div className="w-32 h-3 bg-gray-200 rounded-full mt-2 border border-[#8E8D8A] overflow-hidden mx-auto">
-                      <div 
-                        className="h-full bg-gradient-to-r from-red-500 to-pink-500 transition-all duration-300" 
-                        style={{ width: `${(battle.enemy.hp / battle.enemy.maxHp) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Fixed Height Battle Log Window with Auto-Scroll */}
-              <div 
-                ref={battleLogRef}
-                className="bg-black/80 text-white p-3 rounded-xl h-32 flex-shrink-0 font-mono text-[11px] overflow-y-auto border-2 border-[#8E8D8A] custom-scrollbar scroll-smooth"
-              >
-                {battle.log.map((log, i) => <div key={i} className="mb-1 border-b border-white/5 pb-1 last:border-0">{log}</div>)}
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 flex-shrink-0">
-                <button onClick={() => handleBattleTurn('ATTACK')} className="py-3 bg-[#E98074] text-white rounded-lg font-bold border-b-4 border-[#E85A4F] active:border-b-0 active:translate-y-1 relative">
-                  <span className="absolute top-1 left-2 text-[8px] opacity-60">[1]</span> 攻撃
-                </button>
-                <button onClick={() => setGameState(GameState.MENU)} className="py-3 bg-[#D8C3A5] rounded-lg font-bold border-b-4 border-[#8E8D8A] active:border-b-0 active:translate-y-1 relative">
-                  <span className="absolute top-1 left-2 text-[8px] opacity-60">[2]</span> 道具
-                </button>
-                <button onClick={() => handleBattleTurn('RUN')} className="py-3 bg-[#8E8D8A] text-white rounded-lg font-bold border-b-4 border-[#4A4A48] active:border-b-0 active:translate-y-1 relative">
-                  <span className="absolute top-1 left-2 text-[8px] opacity-60">[3]</span> 逃走
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Menu / Inventory State */}
           {gameState === GameState.MENU && (
-            <div className="h-full flex flex-col p-4 bg-[#F1FAEE]">
+            <div className="h-full flex flex-col p-4 bg-[#F1FAEE] z-30 relative">
               <div className="flex justify-between items-center mb-4 border-b-2 border-[#D8C3A5] pb-2">
                 <h2 className="text-xl font-bold flex items-center gap-2"><Sword size={20} /> MENU</h2>
                 <button onClick={() => setGameState(battle ? GameState.BATTLE : (currentFloor ? GameState.DUNGEON : GameState.TOWN))} className="px-4 py-1 bg-[#8E8D8A] text-white rounded-lg text-sm font-bold active:scale-95 transition relative">
-                  閉じる <span className="text-[10px] ml-1 opacity-60">[Esc/C]</span>
+                  閉じる
                 </button>
               </div>
-              
               <div className="grid grid-cols-2 gap-4 mb-4 text-[11px]">
                 <div className="p-2 bg-white rounded-lg border border-[#D8C3A5] shadow-sm">
                   <p className="opacity-60 font-bold">ATK</p>
-                  <p className="text-lg font-bold text-[#E98074]">{player.stats.atk + (player.equippedWeapon?.effectValue || 0)} <span className="text-[10px] opacity-40">(+{player.equippedWeapon?.effectValue || 0})</span></p>
+                  <p className="text-lg font-bold text-[#E98074]">{player.stats.atk + (player.equippedWeapon?.effectValue || 0)}</p>
                 </div>
                 <div className="p-2 bg-white rounded-lg border border-[#D8C3A5] shadow-sm">
                   <p className="opacity-60 font-bold">DEF</p>
-                  <p className="text-lg font-bold text-[#D8C3A5]">{player.stats.def + (player.equippedArmor?.effectValue || 0)} <span className="text-[10px] opacity-40">(+{player.equippedArmor?.effectValue || 0})</span></p>
+                  <p className="text-lg font-bold text-[#D8C3A5]">{player.stats.def + (player.equippedArmor?.effectValue || 0)}</p>
                 </div>
               </div>
-
               <h3 className="font-bold mb-2 flex items-center gap-2 text-sm"><ShoppingBag size={16} /> 持ち物 ({player.gold}G)</h3>
               <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                {player.inventory.length === 0 && <p className="text-center opacity-40 mt-10 text-sm italic">空っぽです</p>}
-                {player.inventory.map((item, i) => {
-                  const isEquipped = player.equippedWeapon?.id === item.id || player.equippedArmor?.id === item.id;
-                  return (
-                    <div key={i} className={`bg-white p-3 rounded-lg border flex justify-between items-center transition relative ${isEquipped ? 'border-[#E98074] ring-1 ring-[#E98074]' : 'border-[#D1C7BD]'}`}>
-                      <span className="absolute left-1 top-1 text-[8px] font-bold text-gray-400">[{i+1}]</span>
-                      <div className="pl-4">
-                        <span className="font-bold text-xs block flex items-center gap-1">
-                          {item.name}
-                          {isEquipped && <span className="text-[8px] bg-[#E98074] text-white px-1 rounded">装備中</span>}
-                        </span>
-                        <span className="text-[10px] opacity-60 leading-tight block mt-1">{item.description}</span>
-                      </div>
-                      <button 
-                        onClick={() => useItem(item)} 
-                        disabled={isEquipped && item.type !== 'CONSUMABLE'}
-                        className={`px-3 py-1 rounded-full text-[10px] font-bold transition ${isEquipped && item.type !== 'CONSUMABLE' ? 'bg-gray-100 text-gray-400' : 'bg-[#D8C3A5] hover:bg-[#E98074] hover:text-white'}`}
-                      >
-                        {item.type === 'CONSUMABLE' ? '使う' : '装備'}
-                      </button>
+                {player.inventory.map((item, i) => (
+                  <div key={i} className="bg-white p-2 rounded-lg border flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-bold">{item.name}</p>
+                      <p className="text-[10px] opacity-60">{item.description}</p>
                     </div>
-                  )
-                })}
+                    <button onClick={() => useItem(item)} className="px-3 py-1 bg-[#D8C3A5] rounded-full text-[10px] font-bold">
+                      {item.type === 'CONSUMABLE' ? '使う' : '装備'}
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Game Over State */}
           {gameState === GameState.GAMEOVER && (
-            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-[#222] text-white">
-              <div className="w-20 h-20 bg-red-900/30 rounded-full flex items-center justify-center mb-4 border-4 border-red-500/50">
-                <Heart size={40} className="text-red-500" />
-              </div>
-              <h2 className="text-4xl font-bold mb-4 tracking-tighter text-red-500">YOU DIED</h2>
-              <p className="mb-8 opacity-60 text-sm">力尽きてしまった。所持金が半分になり、町へ戻されます...</p>
-              <button 
-                onClick={() => {
-                  setPlayer(p => ({ 
-                    ...p, 
-                    gold: Math.floor(p.gold / 2),
-                    stats: { ...p.stats, hp: p.stats.maxHp } 
-                  }));
-                  setGameState(GameState.TOWN);
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-[#222] text-white z-50 absolute inset-0">
+              <h2 className="text-4xl font-bold mb-4 tracking-tighter text-red-500">GAME OVER</h2>
+              <p className="mb-8 opacity-60 text-sm">力尽きてしまった...</p>
+              <button onClick={() => {
+                  setPlayer(p => ({ ...p, gold: Math.floor(p.gold / 2), stats: { ...p.stats, hp: p.stats.maxHp } }));
+                  backToTown();
                 }}
-                className="px-8 py-3 bg-red-600 text-white rounded-full font-bold hover:bg-red-700 transition active:scale-95 relative"
+                className="px-8 py-3 bg-red-600 text-white rounded-full font-bold transition"
               >
-                復活する <span className="text-[10px] ml-2 opacity-60">[Enter]</span>
+                町へ戻る
               </button>
             </div>
           )}
         </div>
 
-        {/* Floating Message Overlay */}
         {message && (
           <div className="absolute inset-x-0 bottom-24 flex justify-center z-50 animate-in fade-in slide-in-from-bottom duration-300">
             <div className="bg-[#4A4A48]/90 text-white px-5 py-2 rounded-xl text-xs font-bold backdrop-blur-sm border border-white/20 flex items-center gap-4 shadow-xl">
               {message}
-              <button className="bg-white/20 hover:bg-white/40 px-2 py-1 rounded text-[10px] transition" onClick={() => setMessage('')}>OK [Enter]</button>
+              <button className="bg-white/20 hover:bg-white/40 px-2 py-1 rounded text-[10px] transition" onClick={() => setMessage('')}>OK</button>
             </div>
           </div>
         )}
-        
-        {/* Footer info */}
-        <div className="bg-[#8E8D8A] p-1 flex justify-center items-center gap-4 text-[9px] text-white/40 uppercase tracking-[0.2em] font-mono">
-           <span>Dusty Dungeon Chronicles</span>
-           <span>&copy; 2024 Pixel Labs</span>
-        </div>
       </div>
-      
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #D8C3A5; border-radius: 10px; }
-      `}</style>
     </div>
   );
 };
