@@ -49,6 +49,7 @@ const App: React.FC = () => {
       const newExplored = [...currentFloor.explored.map(row => [...row])];
       let changed = false;
 
+      // プレイヤーの周囲1マスを探索済みにする
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const nx = x + dx;
@@ -85,8 +86,12 @@ const App: React.FC = () => {
 
   const handleFloorEnter = async (floorNum: number, pName: string, pJob: JobType) => {
     setGameState(GameState.DIALOGUE);
-    const talk = await generateFloorDialogue(floorNum, pName, pJob);
-    setDialogue(talk);
+    try {
+      const talk = await generateFloorDialogue(floorNum, pName, pJob);
+      setDialogue(talk);
+    } catch (e) {
+      setDialogue({ speaker: "案内人", message: `${floorNum}階へようこそ。`, portrait: GUIDE_IMAGE });
+    }
   };
 
   const startDungeon = useCallback(() => {
@@ -98,8 +103,11 @@ const App: React.FC = () => {
 
   const triggerBattle = async () => {
     const enemyNames = Object.keys(ENEMY_IMAGES);
-    const name = enemyNames[Math.floor(Math.random() * enemyNames.length)];
-    const intro = await generateBattleIntro(name);
+    const name = enemyNames[Math.floor(Math.random() * enemyNames.length)] || "モンスター";
+    let intro = "敵が現れた！";
+    try {
+      intro = await generateBattleIntro(name);
+    } catch (e) {}
     
     setBattle({
       enemy: {
@@ -140,14 +148,17 @@ const App: React.FC = () => {
         return { ...prev, direction: ndir };
       }
 
+      // 壁チェック
       if (nx < 0 || ny < 0 || nx >= currentFloor.width || ny >= currentFloor.height || currentFloor.grid[ny][nx] === 1) {
         return prev;
       }
 
+      // 階段チェック
       if (currentFloor.grid[ny][nx] === 2) {
         if (prev.floor >= DUNGEON_CONFIG.MAX_FLOORS) {
           setMessage("おめでとう！ダンジョンを制覇した！");
           backToTown();
+          return prev;
         } else {
           const nextFloorNum = prev.floor + 1;
           const nextFloor = generateFloor(DUNGEON_CONFIG.FLOOR_WIDTH, DUNGEON_CONFIG.FLOOR_HEIGHT);
@@ -157,7 +168,8 @@ const App: React.FC = () => {
         }
       }
 
-      if ((nx !== prev.x || ny !== prev.y) && Math.random() < 0.15) {
+      // エンカウント
+      if ((nx !== prev.x || ny !== prev.y) && Math.random() < 0.12) {
         triggerBattle();
       }
 
