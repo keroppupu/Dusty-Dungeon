@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { GameState, Player, DungeonFloor, JobType, Item, Enemy } from './types';
-import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA, DUNGEON_CONFIG, ENEMY_IMAGES, GUIDE_IMAGE } from './constants';
-import { generateFloor } from './services/dungeonGenerator';
-import { generateFloorDialogue, generateBattleIntro } from './services/geminiService';
-import DungeonRenderer from './components/DungeonRenderer';
-import VirtualPad from './components/VirtualPad';
+import { GameState, Player, DungeonFloor, JobType, Item, Enemy } from './types.ts';
+import { COLORS, INITIAL_ITEMS, SHOP_INVENTORY, JOB_DATA, DUNGEON_CONFIG, ENEMY_IMAGES, GUIDE_IMAGE } from './constants.tsx';
+import { generateFloor } from './services/dungeonGenerator.ts';
+import { generateFloorDialogue, generateBattleIntro } from './services/geminiService.ts';
+import DungeonRenderer from './components/DungeonRenderer.tsx';
+import VirtualPad from './components/VirtualPad.tsx';
 import { ShoppingBag, Sword, Shield, Heart, Zap, User, ArrowRight } from 'lucide-react';
 
 interface VisualEffect {
@@ -49,7 +49,6 @@ const App: React.FC = () => {
       const newExplored = [...currentFloor.explored.map(row => [...row])];
       let changed = false;
 
-      // プレイヤーの周囲1マスを探索済みにする
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const nx = x + dx;
@@ -148,12 +147,10 @@ const App: React.FC = () => {
         return { ...prev, direction: ndir };
       }
 
-      // 壁チェック
       if (nx < 0 || ny < 0 || nx >= currentFloor.width || ny >= currentFloor.height || currentFloor.grid[ny][nx] === 1) {
         return prev;
       }
 
-      // 階段チェック
       if (currentFloor.grid[ny][nx] === 2) {
         if (prev.floor >= DUNGEON_CONFIG.MAX_FLOORS) {
           setMessage("おめでとう！ダンジョンを制覇した！");
@@ -168,7 +165,6 @@ const App: React.FC = () => {
         }
       }
 
-      // エンカウント
       if ((nx !== prev.x || ny !== prev.y) && Math.random() < 0.12) {
         triggerBattle();
       }
@@ -322,7 +318,6 @@ const App: React.FC = () => {
   return (
     <div className={`flex items-center justify-center min-h-screen bg-[#F5F5F5] p-2 text-[#4A4A48] select-none overflow-hidden ${activeVfx.some(v => v.type === 'shake' && v.target === 'player') ? 'animate-shake' : ''}`}>
       <div className="relative w-full max-w-lg aspect-[3/4] bg-[#EAE7DC] border-8 border-[#8E8D8A] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-        {/* Header Stats */}
         <div className="bg-[#8E8D8A] text-white p-3 flex justify-between items-center shadow-md z-10">
           <div className="flex items-center gap-2">
             <div className="bg-[#D8C3A5] p-1 rounded-md text-xs font-bold text-[#4A4A48] flex items-center gap-1">
@@ -337,7 +332,6 @@ const App: React.FC = () => {
         </div>
 
         <div className="flex-1 relative overflow-hidden bg-black">
-          {/* Main Visual Content */}
           {(gameState === GameState.DUNGEON || gameState === GameState.BATTLE || gameState === GameState.DIALOGUE) && currentFloor && (
             <div className="h-full relative">
               <DungeonRenderer player={player} floor={currentFloor} />
